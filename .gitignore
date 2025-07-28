@@ -1,0 +1,8 @@
+*.env
+.env
+*.sql
+*.csv
+*.mp3
+*.json
+/temp/
+/.venv/
