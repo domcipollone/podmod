@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import librosa
 import tempfile
-from joblib import load 
+import joblib 
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -19,7 +19,7 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
     try:
-        return load('xgb_prod_model.joblib')
+        return joblib.load('xgb_prod_model.joblib')
     except:
         st.error("Model file not found! Please upload your model joblib")
         return None
