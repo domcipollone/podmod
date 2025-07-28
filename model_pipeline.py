@@ -140,6 +140,7 @@ def extract_segment_features(audio_file, start_time, duration):
     return features
 
 def analyze_podcast(audio_file_path, segment_duration=30):
+    """Your existing analyze function with tempo fix"""
     model = load_model()
     if model is None:
         return None, None
@@ -354,39 +355,95 @@ def create_ad_free_audio(original_audio_path, results, output_format='mp3'):
 def get_audio_player_html(file_path):
     """Create HTML audio player for browser playback"""
     try:
+        # Check file size first
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        
+        if file_size > 25:  # Browser limit for data URLs
+            st.warning(f"File too large for browser playback ({file_size:.1f}MB). Try downloading instead.")
+            return None
+        
         with open(file_path, "rb") as f:
             audio_bytes = f.read()
         
         b64_audio = base64.b64encode(audio_bytes).decode()
         mime_type = 'audio/mpeg' if file_path.endswith('.mp3') else 'audio/wav'
         
+        # Debug info
+        st.write(f"**Debug:** File size: {file_size:.1f}MB, MIME: {mime_type}")
+        st.write(f"**Debug:** Base64 length: {len(b64_audio)} characters")
+        
         audio_html = f"""
-        <audio controls style="width: 100%; margin: 20px 0;">
-            <source src="data:{mime_type};base64,{b64_audio}" type="{mime_type}">
-            Your browser does not support the audio element.
-        </audio>
+        <div style="margin: 20px 0;">
+            <audio controls style="width: 100%;" preload="auto">
+                <source src="data:{mime_type};base64,{b64_audio}" type="{mime_type}">
+                Your browser does not support the audio element.
+            </audio>
+        </div>
         """
         return audio_html
         
     except Exception as e:
         st.error(f"Error creating audio player: {e}")
+        import traceback
+        st.error(f"Full error: {traceback.format_exc()}")
         return None
 
 def get_audio_download_link(file_path, filename):
     """Generate download link for audio file"""
     try:
+        # Check file size
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        
+        if file_size > 25:  # Browser limit for data URLs
+            st.warning(f"File too large for direct download ({file_size:.1f}MB). File saved locally.")
+            st.info(f"File location: {file_path}")
+            return None
+        
         with open(file_path, "rb") as f:
             audio_bytes = f.read()
         
         b64_audio = base64.b64encode(audio_bytes).decode()
         mime_type = 'audio/mpeg' if filename.endswith('.mp3') else 'audio/wav'
         
-        download_link = f'<a href="data:{mime_type};base64,{b64_audio}" download="{filename}">⬇️ Download Ad-Free Podcast</a>'
+        # Debug info
+        st.write(f"**Download Debug:** File size: {file_size:.1f}MB")
+        
+        download_link = f"""
+        <a href="data:{mime_type};base64,{b64_audio}" download="{filename}" 
+           style="display: inline-block; padding: 10px 20px; background-color: #4CAF50; 
+                  color: white; text-decoration: none; border-radius: 5px; margin: 10px 0;">
+            ⬇️ Download Ad-Free Podcast ({file_size:.1f}MB)
+        </a>
+        """
         return download_link
         
     except Exception as e:
         st.error(f"Error creating download link: {e}")
+        import traceback
+        st.error(f"Full error: {traceback.format_exc()}")
         return None
+
+# Alternative: Use Streamlit's built-in download button
+def create_streamlit_download_button(file_path, filename):
+    """Use Streamlit's native download button"""
+    try:
+        with open(file_path, "rb") as f:
+            audio_bytes = f.read()
+        
+        mime_type = 'audio/mpeg' if filename.endswith('.mp3') else 'audio/wav'
+        
+        st.download_button(
+            label="⬇️ Download Ad-Free Podcast",
+            data=audio_bytes,
+            file_name=filename,
+            mime=mime_type
+        )
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Error creating download button: {e}")
+        return False
 
 def format_duration(seconds):
     """Format duration in seconds to MM:SS or HH:MM:SS"""
@@ -475,23 +532,45 @@ def display_enhanced_results(results, total_duration, original_audio_path):
             ad_free_path = create_ad_free_audio(original_audio_path, results, output_format)
         
         if ad_free_path:
+            # Show file info
+            file_size = os.path.getsize(ad_free_path) / (1024 * 1024)
+            st.info(f"✅ Ad-free file created! Size: {file_size:.1f}MB | Duration: {format_duration(content_duration)}")
+            
             if st.session_state.get('create_player'):
                 st.subheader("🎧 Play Ad-Free Podcast")
-                audio_player = get_audio_player_html(ad_free_path)
-                if audio_player:
-                    st.markdown(audio_player, unsafe_allow_html=True)
-                    st.success("✅ Ad-free podcast ready to play!")
+                
+                if file_size < 25:  # Small enough for browser
+                    audio_player = get_audio_player_html(ad_free_path)
+                    if audio_player:
+                        st.markdown(audio_player, unsafe_allow_html=True)
+                        st.success("✅ Playing in browser!")
+                    else:
+                        st.error("❌ Could not create audio player")
+                else:
+                    st.warning("File too large for browser playback. Please download instead.")
+                
                 st.session_state.create_player = False
             
             if st.session_state.get('create_download'):
                 st.subheader("⬇️ Download Ad-Free Podcast")
+                
                 download_filename = f"podcast_ad_free.{output_format}"
-                download_link = get_audio_download_link(ad_free_path, download_filename)
-                if download_link:
-                    st.markdown(download_link, unsafe_allow_html=True)
-                    file_size = os.path.getsize(ad_free_path) / (1024 * 1024)
-                    st.info(f"File size: {file_size:.1f} MB | Duration: {format_duration(content_duration)}")
+                
+                # Try Streamlit's native download button first
+                if create_streamlit_download_button(ad_free_path, download_filename):
+                    st.success("✅ Click the download button above!")
+                else:
+                    # Fallback to HTML download link
+                    download_link = get_audio_download_link(ad_free_path, download_filename)
+                    if download_link:
+                        st.markdown(download_link, unsafe_allow_html=True)
+                    else:
+                        st.error("❌ Could not create download link")
+                        st.info(f"File saved at: {ad_free_path}")
+                
                 st.session_state.create_download = False
+        else:
+            st.error("❌ Failed to create ad-free audio")
     
     # Detailed results
     with st.expander("📋 Detailed Results"):
