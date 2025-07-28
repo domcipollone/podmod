@@ -19,7 +19,7 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
     try:
-        return joblib.load('xgb_prod_model.joblib')
+        return joblib.load('./xgb_prod_model.joblib')
     except:
         st.error("Model file not found! Please upload your model joblib")
         return None
