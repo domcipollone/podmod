@@ -19,8 +19,7 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
     try:
-        with open('feature_analysis/models/xgb_best_model_20250727.joblib', 'rb') as f:
-            return load(f)
+        load('feature_analysis/models/xgb_best_model_20250727.joblib')
     except:
         st.error("Model file not found! Please upload your model joblib")
         return None
