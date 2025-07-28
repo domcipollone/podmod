@@ -93,11 +93,11 @@ def extract_segment_features(audio_file, start_time, duration):
         tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
         features['tempo'] = tempo
         features['beat_count'] = len(beats)
-        features['beats_per_second'] = len(beats) / duration
+        # features['beats_per_second'] = len(beats) / duration
     except:
         features['tempo'] = 0
         features['beat_count'] = 0
-        features['beats_per_second'] = 0
+        # features['beats_per_second'] = 0
     
     # ==========================================
     # HARMONIC FEATURES (Pitch/Harmony)
