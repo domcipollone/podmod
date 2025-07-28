@@ -4,11 +4,8 @@ import pandas as pd
 import librosa
 import tempfile
 from joblib import load 
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 import plotly.express as px
 import plotly.graph_objects as go
-import os 
 
 # page config 
 st.set_page_config(
