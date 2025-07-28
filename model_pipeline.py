@@ -185,6 +185,7 @@ def analyze_podcast(audio_file_path, segment_duration=30):
             continue
             
         feature_df = pd.DataFrame([features])
+        feature_df['tempo'] = feature_df['tempo'].str.extract(r'(\d+\.?\d*)').astype(float)
         prediction_proba = model.predict_proba(feature_df)[0] # converts from 2D array to 1D array 
         
         # Get probability of ad (class 1)
