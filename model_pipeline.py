@@ -18,12 +18,7 @@ st.set_page_config(
 # Load model
 @st.cache_resource
 def load_model():
-    try:
-        return joblib.load('./xgb_prod_model.joblib')
-    except:
-        st.error("Model file not found! Please upload your model joblib")
-        return None
-
+    return joblib.load('./feature_analysis/models/xgb_best_model_20250727.joblib')
 
 def extract_segment_features(audio_file, start_time, duration):
     
