@@ -1,79 +1,40 @@
-import os
-import pandas as pd
+import streamlit as st
 import numpy as np
+import pandas as pd
 import librosa
-import warnings
+import tempfile
+from joblib import load 
+import matplotlib.pyplot as plt
 from tqdm import tqdm
-import traceback 
-import multiprocessing as mp 
-from functools import partial 
-from sqlalchemy import create_engine
-warnings.filterwarnings('ignore')
+import plotly.express as px
+import plotly.graph_objects as go
+import os 
+
+# page config 
+st.set_page_config(
+    page_title="🎧 Podcast Ad Detector",
+    page_icon="🎧",
+    layout="wide"
+)
 
 
-correlated_features = ['spectral_rolloff_85_mean', 'chroma_var', 'amplitude_mean', 'amplitude_std', 'spectral_rolloff_95_mean', 'dynamic_range', 'spectral_rolloff_mean']
-correlated_features_v2 = ['poly_features_mean', 'zcr_std', 'beats_per_second', 'poly_features_std', 'amplitude_min', 'mfcc_2_mean', 'poly_features_std', 'poly_features_std', 'spectral_flatness_std', 'rms_std']
-
-
-class QueryDatabase: 
-
-    def __init__(self):
-        self.db_engine = create_engine(os.getenv("DB_CONN_STRING"))
-        print("Built DB engine")
-
-    def write_data(self, df, table_name): 
-
-        try: 
-            print(f"Attempting to write {len(df)} rows to {table_name}")
-
-            with self.db_engine.connect() as conn: 
-                df.to_sql(name=table_name, con=conn, if_exists='append', index=False, chunksize=1000, method='multi')
-
-            print(f"Sucessfully wrote data to {table_name}")
-            print("Disposing of Engine")
-
-            self.db_engine.dispose()
-
-            return self
-
-        except Exception: 
-            self.db_engine.dispose()
-            print(f"Failed to write data to {table_name}")
-            print(f"Full traceback: {traceback.format_exc()}")
-            return None
-        
-    def read_data(self, query):
-
-        try: 
-            print("Attempting to read data")
-            with self.db_engine.connect() as conn: 
-                df = pd.read_sql_query(sql=query, con=conn)
-
-            print("Sucessfully read data")
-            print("Disposing of Engine")
-
-            return df
-        
-        except Exception as e:
-            self.db_engine.dispose()
-            print(f"Failed to read data: {e}")
-            print(f"Full traceback: {traceback.format_exc()}")
-            return None 
+# Load model
+@st.cache_resource
+def load_model():
+    try:
+        with open('feature_analysis/models/xgb_best_model_20250727.joblib', 'rb') as f:
+            return load(f)
+    except:
+        st.error("Model file not found! Please upload your model joblib")
+        return None
 
 
 def extract_segment_features(audio_file, start_time, duration):
-    """
-    Extract comprehensive features from a single audio segment
-    
-    Returns:
-        Dictionary with all extracted features
-    """
     
     # Load audio segment
     y, sr = librosa.load(audio_file, offset=start_time, duration=duration, sr=22050)
     
     if len(y) == 0:
-        # raise ValueError(f"Empty audio segment")
         return None 
     
     features = {}
@@ -94,7 +55,6 @@ def extract_segment_features(audio_file, start_time, duration):
     
     # 3. Spectral Rolloff - frequency below which 85% of energy is contained
     spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
-    # features['spectral_rolloff_mean'] = np.mean(spectral_rolloff)
     features['spectral_rolloff_std'] = np.std(spectral_rolloff)
     
     # 4. Spectral Contrast - difference between peaks and valleys in spectrum
@@ -182,77 +142,159 @@ def extract_segment_features(audio_file, start_time, duration):
     
     return features
 
-def process_row(row, training_path): 
-    audio_file = row['audio_file']
-    full_path = os.path.join(training_path, audio_file)
-
-        # handle audio file not existing 
-    if os.path.isfile(full_path):
-
-        features = extract_segment_features(audio_file=full_path,
-                                            start_time=row['start_time'],
-                                            duration=row['duration']
+def analyze_podcast(audio_file_path, segment_duration=30):
+    """Analyze podcast and return results"""
+    model = load_model()
+    if model is None:
+        return None, None
+    
+    # Get duration
+    y_full, sr = librosa.load(audio_file_path, sr=22050)
+    total_duration = len(y_full) / sr
+    
+    # Create segments
+    segments = []
+    current_time = 0
+    
+    while current_time < total_duration:
+        segment_end = min(current_time + segment_duration, total_duration)
+        actual_duration = segment_end - current_time
+        
+        if actual_duration < 5:
+            break
+            
+        segments.append({
+            'start_time': current_time,
+            'end_time': segment_end,
+            'duration': actual_duration
+        })
+        
+        current_time += segment_duration
+    
+    # Analyze segments
+    results = []
+    progress_bar = st.progress(0)
+    
+    for i, segment in enumerate(segments):
+        progress_bar.progress((i + 1) / len(segments))
+        
+        features = extract_segment_features(
+            audio_file_path, 
+            segment['start_time'], 
+            segment['duration']
         )
         
-        if features is not None: 
-            features.update({
-                    'audio_file': row['audio_file'],
-                    'transcript_id': row['transcript_id'],
-                    'start_time': row['start_time'],
-                    'end_time': row['end_time'],
-                    'duration': row['duration'],
-                    'confidence': row['confidence'],
-                    'target': row['label'],
-                })
-                
-            return features # returns dictionary of features 
+        if features is None:
+            continue
+            
+        feature_df = pd.DataFrame([features])
+        prediction_proba = model.predict_proba(feature_df)[0] # converts from 2D array to 1D array 
         
-        else: 
-            return None 
+        # Get probability of ad (class 1)
+        ad_probability = prediction_proba[1] if len(prediction_proba) > 1 else 0
+        
+        # Apply custom threshold: >= 0.21 = ad, < 0.21 = content
+        prediction = 'ad' if ad_probability >= 0.21 else 'content'
+        confidence = ad_probability if prediction == 'ad' else (1 - ad_probability)
+        
+        results.append({
+            'start_time': segment['start_time'],
+            'end_time': segment['end_time'],
+            'duration': segment['duration'],
+            'prediction': prediction,
+            'confidence': confidence,
+            'ad_probability': ad_probability
+        })
     
-    else: 
-        return None 
+    progress_bar.empty()
+    return results, total_duration
+
+# Main app
+def main():
+    st.title("🎧 Podcast Ad Detector")
+    st.markdown("Upload your podcast and see which segments are likely ads!")
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Choose your podcast file",
+        type=['mp3', 'wav', 'm4a'],
+        help="Upload an audio file to analyze for advertisements"
+    )
+    
+    if uploaded_file is not None:
+        st.success(f"File uploaded: {uploaded_file.name}")
+        
+        if st.button("🔍 Analyze for Ads", type="primary"):
+            with st.spinner("Processing your podcast... This may take a few minutes."):
+                # Save uploaded file temporarily
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                    tmp_file.write(uploaded_file.read())
+                    tmp_file_path = tmp_file.name
+                
+                # Analyze
+                results, total_duration = analyze_podcast(tmp_file_path)
+                
+                if results:
+                    # Calculate stats
+                    ad_segments = [r for r in results if r['prediction'] == 'ad']
+                    ad_duration = sum([r['duration'] for r in ad_segments])
+                    
+                    # Display stats
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Total Duration", f"{total_duration/60:.1f} min")
+                    with col2:
+                        st.metric("Ad Segments", len(ad_segments))
+                    with col3:
+                        st.metric("Ad Duration", f"{ad_duration/60:.1f} min")
+                    with col4:
+                        st.metric("Ads Percentage", f"{(ad_duration/total_duration)*100:.1f}%")
+                    
+                    # Create timeline visualization
+                    st.subheader("📊 Timeline Visualization")
+                    
+                    fig = go.Figure()
+                    
+                    for result in results:
+                        color = '#FF6B6B' if result['prediction'] == 'ad' else '#4ECDC4'
+                        fig.add_trace(go.Scatter(
+                            x=[result['start_time']/60, result['end_time']/60],
+                            y=[1, 1],
+                            mode='lines',
+                            line=dict(color=color, width=20),
+                            name=result['prediction'].title(),
+                            hovertemplate=f"<b>{result['prediction'].title()}</b><br>" +
+                                        f"Time: {result['start_time']/60:.1f} - {result['end_time']/60:.1f} min<br>" +
+                                        f"Confidence: {result['confidence']:.1%}<extra></extra>"
+                        ))
+                    
+                    fig.update_layout(
+                        title="Podcast Timeline (Red = Ads, Teal = Content)",
+                        xaxis_title="Time (minutes)",
+                        yaxis=dict(visible=False),
+                        height=200,
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed results
+                    with st.expander("📋 Detailed Results"):
+                        df = pd.DataFrame(results)
+                        df['start_min'] = df['start_time'] / 60
+                        df['end_min'] = df['end_time'] / 60
+                        df['confidence_pct'] = df['confidence'] * 100
+                        
+                        st.dataframe(
+                            df[['start_min', 'end_min', 'prediction', 'confidence_pct']],
+                            column_config={
+                                'start_min': st.column_config.NumberColumn('Start (min)', format="%.1f"),
+                                'end_min': st.column_config.NumberColumn('End (min)', format="%.1f"),
+                                'prediction': st.column_config.TextColumn('Prediction'),
+                                'confidence_pct': st.column_config.NumberColumn('Confidence (%)', format="%.1f")
+                            }
+                        )
 
 if __name__ == "__main__":
-
-    q = QueryDatabase()
-
-    segment_query = f"""
-        SELECT 
-        tl.audio_file,
-        pod.transcript_id,
-        pod.start_time::NUMERIC / 1000 AS start_time,
-        pod.end_time::NUMERIC / 1000 AS end_time,
-        (pod.end_time - pod.start_time)::NUMERIC / 1000 AS duration, 
-        pod.confidence, pod.label
-        FROM podcast_segment_labels pod  
-        INNER JOIN transcript_log tl 
-        USING (transcript_id) 
-        ORDER BY pod.transcript_id, 3 
-    """
-
-    df = q.read_data(query=segment_query)
-    training_path = "training_data/audio/"
-
-    feature_list = []
-
-    rows = df.to_dict('records')
-
-    process_func = partial(process_row, training_path=training_path)
-
-    # Use multiprocessing
-    num_cores = mp.cpu_count() - 1  # Leave one core free
-    print(f"Using {num_cores} cores to process {len(rows)} segments")
-    
-    with mp.Pool(processes=num_cores) as pool:
-        # Use imap for progress tracking with tqdm
-        feature_list = list(tqdm(
-            pool.imap(process_func, rows), 
-            total=len(rows),
-            desc="Processing segments"
-        ))
-
-    feature_list = [f for f in feature_list if f is not None]        
-    features_df = pd.DataFrame(feature_list)
-
-    features_df.to_csv('feature_analysis/features_20250725.csv', index=False)
+    main()
