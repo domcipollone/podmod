@@ -27,6 +27,7 @@ def load_model():
     return joblib.load('./feature_analysis/models/xgb_best_model_20250727.joblib')
 
 def extract_segment_features(audio_file, start_time, duration):
+    """Extract comprehensive features from a single audio segment"""
     
     # Load audio segment
     y, sr = librosa.load(audio_file, offset=start_time, duration=duration, sr=22050)
@@ -139,7 +140,7 @@ def extract_segment_features(audio_file, start_time, duration):
     return features
 
 def analyze_podcast(audio_file_path, segment_duration=30):
-    """Your existing analyze function with tempo fix"""
+    """Analyze podcast and return results"""
     model = load_model()
     if model is None:
         return None, None
@@ -212,7 +213,7 @@ def analyze_podcast(audio_file_path, segment_duration=30):
     return results, total_duration
 
 # ==========================================
-# NEW FEATURES: Podcast Search
+# PODCAST SEARCH FEATURES
 # ==========================================
 
 def search_podcasts(query, limit=5):
@@ -317,11 +318,12 @@ def download_episode(audio_url, max_size_mb=50):
         return None
 
 # ==========================================
-# NEW FEATURES: Ad-Free Playback
+# AD-FREE AUDIO PROCESSING
 # ==========================================
 
+@st.cache_data
 def create_ad_free_audio(original_audio_path, results, output_format='mp3'):
-    """Create ad-free version by removing ad segments"""
+    """Create ad-free version by removing ad segments - cached to prevent recreation"""
     try:
         audio = AudioSegment.from_file(original_audio_path)
         
@@ -342,7 +344,14 @@ def create_ad_free_audio(original_audio_path, results, output_format='mp3'):
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{output_format}')
             ad_free_audio.export(temp_file.name, format=output_format)
             
-            return temp_file.name
+            # Read the file data
+            with open(temp_file.name, 'rb') as f:
+                audio_data = f.read()
+            
+            # Clean up temp file
+            os.unlink(temp_file.name)
+            
+            return audio_data
         else:
             st.error("No content segments found!")
             return None
@@ -350,79 +359,6 @@ def create_ad_free_audio(original_audio_path, results, output_format='mp3'):
     except Exception as e:
         st.error(f"Error creating ad-free audio: {e}")
         return None
-
-def get_audio_player_html(file_path):
-    """Create HTML audio player for browser playback"""
-    try:
-        # Check file size first
-        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-        
-        if file_size > 25:  # Browser limit for data URLs
-            st.warning(f"File too large for browser playback ({file_size:.1f}MB). Try downloading instead.")
-            return None
-        
-        with open(file_path, "rb") as f:
-            audio_bytes = f.read()
-        
-        b64_audio = base64.b64encode(audio_bytes).decode()
-        mime_type = 'audio/mpeg' if file_path.endswith('.mp3') else 'audio/wav'
-        
-        # Debug info
-        st.write(f"**Debug:** File size: {file_size:.1f}MB, MIME: {mime_type}")
-        st.write(f"**Debug:** Base64 length: {len(b64_audio)} characters")
-        
-        audio_html = f"""
-        <div style="margin: 20px 0;">
-            <audio controls style="width: 100%;" preload="auto">
-                <source src="data:{mime_type};base64,{b64_audio}" type="{mime_type}">
-                Your browser does not support the audio element.
-            </audio>
-        </div>
-        """
-        return audio_html
-        
-    except Exception as e:
-        st.error(f"Error creating audio player: {e}")
-        import traceback
-        st.error(f"Full error: {traceback.format_exc()}")
-        return None
-
-def get_audio_download_link(file_path, filename):
-    """Generate download link for audio file"""
-    try:
-        # Check file size
-        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-        
-        if file_size > 25:  # Browser limit for data URLs
-            st.warning(f"File too large for direct download ({file_size:.1f}MB). File saved locally.")
-            st.info(f"File location: {file_path}")
-            return None
-        
-        with open(file_path, "rb") as f:
-            audio_bytes = f.read()
-        
-        b64_audio = base64.b64encode(audio_bytes).decode()
-        mime_type = 'audio/mpeg' if filename.endswith('.mp3') else 'audio/wav'
-        
-        # Debug info
-        st.write(f"**Download Debug:** File size: {file_size:.1f}MB")
-        
-        download_link = f"""
-        <a href="data:{mime_type};base64,{b64_audio}" download="{filename}" 
-           style="display: inline-block; padding: 10px 20px; background-color: #4CAF50; 
-                  color: white; text-decoration: none; border-radius: 5px; margin: 10px 0;">
-            ⬇️ Download Ad-Free Podcast ({file_size:.1f}MB)
-        </a>
-        """
-        return download_link
-        
-    except Exception as e:
-        st.error(f"Error creating download link: {e}")
-        import traceback
-        st.error(f"Full error: {traceback.format_exc()}")
-        return None
-
-# Removed create_streamlit_download_button helper function since we're doing it inline
 
 def format_duration(seconds):
     """Format duration in seconds to MM:SS or HH:MM:SS"""
@@ -447,6 +383,7 @@ def display_enhanced_results(results, total_duration, original_audio_path):
     st.session_state.analysis_results = results
     st.session_state.total_duration = total_duration
     st.session_state.original_audio_path = original_audio_path
+    st.session_state.analysis_complete = True
     
     # Calculate stats
     ad_segments = [r for r in results if r['prediction'] == 'ad']
@@ -494,69 +431,58 @@ def display_enhanced_results(results, total_duration, original_audio_path):
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # NEW: Ad-Free Playback Section
+    # Ad-Free Playback Section
     st.subheader("🎵 Ad-Free Podcast")
     
     # Format selection
-    output_format = st.selectbox("Choose format:", ["mp3", "wav"], index=0, key="format_select")
-    
-    col1, col2 = st.columns(2)
-    
+    col1, col2 = st.columns([1, 3])
     with col1:
-        play_button = st.button("🎧 Play in Browser", type="primary", key="play_btn")
+        output_format = st.selectbox("Choose format:", ["mp3", "wav"], index=0, key="format_select")
     
-    with col2:
-        download_button = st.button("⬇️ Download File", key="download_btn")
-    
-    # Process buttons immediately (no rerun needed)
-    if play_button or download_button:
+    # Create the ad-free audio immediately after analysis completes
+    if 'ad_free_audio_data' not in st.session_state or st.session_state.get('last_format') != output_format:
         with st.spinner("Creating ad-free version..."):
-            ad_free_path = create_ad_free_audio(original_audio_path, results, output_format)
+            audio_data = create_ad_free_audio(original_audio_path, results, output_format)
+            if audio_data:
+                st.session_state.ad_free_audio_data = audio_data
+                st.session_state.last_format = output_format
+                st.session_state.content_duration = content_duration
+    
+    # Display download button if audio is ready
+    if 'ad_free_audio_data' in st.session_state and st.session_state.ad_free_audio_data:
+        audio_data = st.session_state.ad_free_audio_data
+        file_size = len(audio_data) / (1024 * 1024)
         
-        if ad_free_path:
-            # Show file info
-            file_size = os.path.getsize(ad_free_path) / (1024 * 1024)
-            st.info(f"✅ Ad-free file created! Size: {file_size:.1f}MB | Duration: {format_duration(content_duration)}")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.info(f"✅ Ad-free file ready! Size: {file_size:.1f}MB | Duration: {format_duration(st.session_state.content_duration)}")
+        
+        with col2:
+            mime_type = 'audio/mpeg' if output_format == 'mp3' else 'audio/wav'
+            download_filename = f"podcast_ad_free.{output_format}"
             
-            if play_button:
-                st.subheader("🎧 Play Ad-Free Podcast")
-                
-                if file_size < 25:  # Small enough for browser
-                    audio_player = get_audio_player_html(ad_free_path)
-                    if audio_player:
-                        st.markdown(audio_player, unsafe_allow_html=True)
-                        st.success("✅ Audio player loaded!")
-                    else:
-                        st.error("❌ Could not create audio player")
-                else:
-                    st.warning("File too large for browser playback. Please download instead.")
-            
-            if download_button:
-                st.subheader("⬇️ Download Ad-Free Podcast")
-                
-                download_filename = f"podcast_ad_free.{output_format}"
-                
-                # Use Streamlit's native download button
-                try:
-                    with open(ad_free_path, "rb") as f:
-                        audio_bytes = f.read()
-                    
-                    mime_type = 'audio/mpeg' if output_format == 'mp3' else 'audio/wav'
-                    
-                    st.download_button(
-                        label="⬇️ Download Ad-Free Podcast",
-                        data=audio_bytes,
-                        file_name=download_filename,
-                        mime=mime_type,
-                        key="download_button_widget"
-                    )
-                    st.success("✅ Click the download button above!")
-                    
-                except Exception as e:
-                    st.error(f"Download error: {e}")
-                    st.info(f"File saved at: {ad_free_path}")
+            st.download_button(
+                label="⬇️ Download Ad-Free Podcast",
+                data=audio_data,
+                file_name=download_filename,
+                mime=mime_type,
+                key="download_button_main"
+            )
+        
+        # Audio player for browser playback
+        if file_size < 25:  # Only show player for files under 25MB
+            st.subheader("🎧 Play in Browser")
+            b64_audio = base64.b64encode(audio_data).decode()
+            audio_html = f"""
+            <audio controls style="width: 100%;" preload="auto">
+                <source src="data:{mime_type};base64,{b64_audio}" type="{mime_type}">
+                Your browser does not support the audio element.
+            </audio>
+            """
+            st.markdown(audio_html, unsafe_allow_html=True)
         else:
-            st.error("❌ Failed to create ad-free audio")
+            st.warning("File too large for browser playback. Please use the download button above.")
     
     # Detailed results
     with st.expander("📋 Detailed Results"):
@@ -575,20 +501,18 @@ def display_enhanced_results(results, total_duration, original_audio_path):
             }
         )
 
-# Remove the process_audio_action function since we're handling it inline
-
 # ==========================================
-# MAIN APP WITH TABS
+# MAIN APPLICATION
 # ==========================================
 
 def main():
     st.title("🎧 Podcast Ad Detector")
-    st.markdown("Upload or search for Podcasts to make ad-free!")
+    st.markdown("Upload your own file or search for podcasts to analyze for ads!")
     
     # Create tabs
     tab1, tab2 = st.tabs(["📁 Upload File", "🔍 Search Podcasts"])
     
-    # Tab 1: File Upload (your existing functionality)
+    # Tab 1: File Upload
     with tab1:
         st.markdown("Upload your own podcast file:")
         uploaded_file = st.file_uploader(
@@ -600,6 +524,7 @@ def main():
         if uploaded_file is not None:
             st.success(f"File uploaded: {uploaded_file.name}")
             
+            # Check if we need to analyze or just display existing results
             if st.button("🔍 Analyze for Ads", type="primary", key="upload_analyze"):
                 with st.spinner("Processing your podcast... This may take a few minutes."):
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
@@ -610,8 +535,16 @@ def main():
                     
                     if results:
                         display_enhanced_results(results, total_duration, tmp_file_path)
+            
+            # If analysis was already done, show the results
+            elif st.session_state.get('analysis_complete') and st.session_state.get('analysis_results'):
+                display_enhanced_results(
+                    st.session_state.analysis_results,
+                    st.session_state.total_duration,
+                    st.session_state.original_audio_path
+                )
     
-    # Tab 2: Podcast Search (new functionality)
+    # Tab 2: Podcast Search
     with tab2:
         st.markdown("Search and select podcasts from iTunes:")
         
@@ -685,7 +618,7 @@ if __name__ == "__main__":
         st.session_state.show_episodes = False
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = None
-    if 'action_requested' not in st.session_state:
-        st.session_state.action_requested = None
+    if 'analysis_complete' not in st.session_state:
+        st.session_state.analysis_complete = False
     
     main()
