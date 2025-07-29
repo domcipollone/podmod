@@ -464,6 +464,11 @@ def format_duration(seconds):
 def display_enhanced_results(results, total_duration, original_audio_path):
     """Enhanced results display with all new features"""
     
+    # Store results in session state so they persist
+    st.session_state.analysis_results = results
+    st.session_state.total_duration = total_duration
+    st.session_state.original_audio_path = original_audio_path
+    
     # Calculate stats
     ad_segments = [r for r in results if r['prediction'] == 'ad']
     ad_duration = sum([r['duration'] for r in ad_segments])
@@ -517,60 +522,21 @@ def display_enhanced_results(results, total_duration, original_audio_path):
     
     with col1:
         if st.button("🎧 Play in Browser", type="primary"):
-            st.session_state.create_player = True
+            st.session_state.action_requested = 'play'
+            st.rerun()  # Force rerun to process the action
     
     with col2:
         if st.button("⬇️ Download File"):
-            st.session_state.create_download = True
+            st.session_state.action_requested = 'download'
+            st.rerun()  # Force rerun to process the action
     
     with col3:
-        output_format = st.selectbox("Format:", ["mp3", "wav"], index=0)
+        output_format = st.selectbox("Format:", ["mp3", "wav"], index=0, key="format_select")
+        st.session_state.output_format = output_format
     
-    # Handle playback/download
-    if st.session_state.get('create_player') or st.session_state.get('create_download'):
-        with st.spinner("Creating ad-free version..."):
-            ad_free_path = create_ad_free_audio(original_audio_path, results, output_format)
-        
-        if ad_free_path:
-            # Show file info
-            file_size = os.path.getsize(ad_free_path) / (1024 * 1024)
-            st.info(f"✅ Ad-free file created! Size: {file_size:.1f}MB | Duration: {format_duration(content_duration)}")
-            
-            if st.session_state.get('create_player'):
-                st.subheader("🎧 Play Ad-Free Podcast")
-                
-                if file_size < 25:  # Small enough for browser
-                    audio_player = get_audio_player_html(ad_free_path)
-                    if audio_player:
-                        st.markdown(audio_player, unsafe_allow_html=True)
-                        st.success("✅ Playing in browser!")
-                    else:
-                        st.error("❌ Could not create audio player")
-                else:
-                    st.warning("File too large for browser playback. Please download instead.")
-                
-                st.session_state.create_player = False
-            
-            if st.session_state.get('create_download'):
-                st.subheader("⬇️ Download Ad-Free Podcast")
-                
-                download_filename = f"podcast_ad_free.{output_format}"
-                
-                # Try Streamlit's native download button first
-                if create_streamlit_download_button(ad_free_path, download_filename):
-                    st.success("✅ Click the download button above!")
-                else:
-                    # Fallback to HTML download link
-                    download_link = get_audio_download_link(ad_free_path, download_filename)
-                    if download_link:
-                        st.markdown(download_link, unsafe_allow_html=True)
-                    else:
-                        st.error("❌ Could not create download link")
-                        st.info(f"File saved at: {ad_free_path}")
-                
-                st.session_state.create_download = False
-        else:
-            st.error("❌ Failed to create ad-free audio")
+    # Process actions if requested
+    if st.session_state.get('action_requested'):
+        process_audio_action()
     
     # Detailed results
     with st.expander("📋 Detailed Results"):
@@ -588,6 +554,68 @@ def display_enhanced_results(results, total_duration, original_audio_path):
                 'confidence_pct': st.column_config.NumberColumn('Confidence (%)', format="%.1f")
             }
         )
+
+def process_audio_action():
+    """Process the audio action (play or download) using stored session state"""
+    
+    # Get data from session state
+    results = st.session_state.get('analysis_results')
+    total_duration = st.session_state.get('total_duration')
+    original_audio_path = st.session_state.get('original_audio_path')
+    action = st.session_state.get('action_requested')
+    output_format = st.session_state.get('output_format', 'mp3')
+    
+    if not all([results, total_duration, original_audio_path, action]):
+        st.error("Missing analysis data. Please re-run analysis.")
+        st.session_state.action_requested = None
+        return
+    
+    # Calculate content duration
+    ad_duration = sum([r['duration'] for r in results if r['prediction'] == 'ad'])
+    content_duration = total_duration - ad_duration
+    
+    with st.spinner("Creating ad-free version..."):
+        ad_free_path = create_ad_free_audio(original_audio_path, results, output_format)
+    
+    if ad_free_path:
+        # Show file info
+        file_size = os.path.getsize(ad_free_path) / (1024 * 1024)
+        st.info(f"✅ Ad-free file created! Size: {file_size:.1f}MB | Duration: {format_duration(content_duration)}")
+        
+        if action == 'play':
+            st.subheader("🎧 Play Ad-Free Podcast")
+            
+            if file_size < 25:  # Small enough for browser
+                audio_player = get_audio_player_html(ad_free_path)
+                if audio_player:
+                    st.markdown(audio_player, unsafe_allow_html=True)
+                    st.success("✅ Playing in browser!")
+                else:
+                    st.error("❌ Could not create audio player")
+            else:
+                st.warning("File too large for browser playback. Please download instead.")
+        
+        elif action == 'download':
+            st.subheader("⬇️ Download Ad-Free Podcast")
+            
+            download_filename = f"podcast_ad_free.{output_format}"
+            
+            # Try Streamlit's native download button first
+            if create_streamlit_download_button(ad_free_path, download_filename):
+                st.success("✅ Click the download button above!")
+            else:
+                # Fallback to HTML download link
+                download_link = get_audio_download_link(ad_free_path, download_filename)
+                if download_link:
+                    st.markdown(download_link, unsafe_allow_html=True)
+                else:
+                    st.error("❌ Could not create download link")
+                    st.info(f"File saved at: {ad_free_path}")
+    else:
+        st.error("❌ Failed to create ad-free audio")
+    
+    # Clear the action request
+    st.session_state.action_requested = None
 
 # ==========================================
 # MAIN APP WITH TABS
@@ -695,5 +723,9 @@ if __name__ == "__main__":
     # Initialize session state
     if 'show_episodes' not in st.session_state:
         st.session_state.show_episodes = False
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'action_requested' not in st.session_state:
+        st.session_state.action_requested = None
     
     main()
