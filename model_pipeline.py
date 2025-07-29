@@ -13,9 +13,6 @@ import base64
 from pydub import AudioSegment
 import soundfile as sf
 from urllib.parse import urljoin
-import whisper
-import re
-from typing import List, Dict, Tuple
 
 # Page config 
 st.set_page_config(
@@ -24,13 +21,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load models
+# Load model
 @st.cache_resource
-def load_models():
-    """Load both the XGBoost model and Whisper model"""
-    xgb_model = joblib.load('./feature_analysis/models/xgb_best_model_20250727.joblib')
-    whisper_model = whisper.load_model("base")  # You can use "small", "medium", "large" for better accuracy
-    return xgb_model, whisper_model
+def load_model():
+    return joblib.load('./feature_analysis/models/xgb_best_model_20250727.joblib')
 
 def extract_segment_features(audio_file, start_time, duration):
     """Extract comprehensive features from a single audio segment"""
@@ -145,195 +139,10 @@ def extract_segment_features(audio_file, start_time, duration):
     
     return features
 
-def transcribe_and_segment(audio_file_path, whisper_model) -> List[Dict]:
-    """Transcribe audio and segment into paragraphs with timestamps"""
-    
-    # Transcribe with Whisper
-    result = whisper_model.transcribe(
-        audio_file_path,
-        language="en",
-        verbose=False,
-        word_timestamps=True  # This gives us word-level timestamps
-    )
-    
-    # Extract segments (Whisper provides these automatically)
-    segments = result['segments']
-    
-    # Group segments into paragraphs based on pauses
-    paragraphs = []
-    current_paragraph = {
-        'text': '',
-        'start': None,
-        'end': None,
-        'words': []
-    }
-    
-    for segment in segments:
-        # Check if this should start a new paragraph
-        # (based on pause duration or punctuation)
-        if current_paragraph['text'] and segment['start'] - current_paragraph['end'] > 1.5:
-            # Save current paragraph
-            paragraphs.append(current_paragraph)
-            current_paragraph = {
-                'text': '',
-                'start': None,
-                'end': None,
-                'words': []
-            }
-        
-        # Add to current paragraph
-        if current_paragraph['start'] is None:
-            current_paragraph['start'] = segment['start']
-        
-        current_paragraph['text'] += ' ' + segment['text'].strip()
-        current_paragraph['end'] = segment['end']
-        
-        # Store word-level timestamps if available
-        if 'words' in segment:
-            current_paragraph['words'].extend(segment['words'])
-    
-    # Don't forget the last paragraph
-    if current_paragraph['text']:
-        paragraphs.append(current_paragraph)
-    
-    # Further split long paragraphs
-    final_paragraphs = []
-    for para in paragraphs:
-        # If paragraph is too long (>30 seconds), split it
-        if para['end'] - para['start'] > 30:
-            # Split based on sentence boundaries
-            sentences = re.split(r'(?<=[.!?])\s+', para['text'].strip())
-            
-            if len(sentences) > 1 and para['words']:
-                # Distribute sentences based on word timestamps
-                word_idx = 0
-                for sentence in sentences:
-                    sentence_words = len(sentence.split())
-                    
-                    if word_idx < len(para['words']):
-                        start_time = para['words'][word_idx]['start'] if word_idx < len(para['words']) else para['start']
-                        end_idx = min(word_idx + sentence_words, len(para['words']) - 1)
-                        end_time = para['words'][end_idx]['end'] if end_idx < len(para['words']) else para['end']
-                        
-                        final_paragraphs.append({
-                            'text': sentence,
-                            'start': start_time,
-                            'end': end_time
-                        })
-                        
-                        word_idx += sentence_words
-            else:
-                # Keep as is if can't split well
-                final_paragraphs.append(para)
-        else:
-            final_paragraphs.append(para)
-    
-    return final_paragraphs
-
-def analyze_podcast_with_paragraphs(audio_file_path):
-    """Analyze podcast using paragraph-level segmentation"""
-    xgb_model, whisper_model = load_models()
-    
-    if xgb_model is None or whisper_model is None:
-        return None, None, None
-    
-    # Get total duration
-    y_full, sr = librosa.load(audio_file_path, sr=22050)
-    total_duration = len(y_full) / sr
-    
-    # Step 1: Transcribe and get paragraph segments
-    with st.spinner("Transcribing audio and detecting paragraphs..."):
-        paragraphs = transcribe_and_segment(audio_file_path, whisper_model)
-    
-    st.success(f"Found {len(paragraphs)} paragraphs to analyze")
-    
-    # Step 2: Analyze each paragraph
-    results = []
-    progress_bar = st.progress(0)
-    
-    for i, paragraph in enumerate(paragraphs):
-        progress_bar.progress((i + 1) / len(paragraphs))
-        
-        # Extract features for this paragraph's audio segment
-        duration = paragraph['end'] - paragraph['start']
-        
-        # Skip very short segments
-        if duration < 1.0:
-            continue
-        
-        features = extract_segment_features(
-            audio_file_path, 
-            paragraph['start'], 
-            duration
-        )
-        
-        if features is None:
-            continue
-        
-        feature_df = pd.DataFrame([features])
-        
-        # Fix tempo processing if needed
-        if 'tempo' in feature_df.columns:
-            if feature_df['tempo'].dtype == 'object':
-                feature_df['tempo'] = pd.to_numeric(feature_df['tempo'], errors='coerce').fillna(0)
-        
-        prediction_proba = xgb_model.predict_proba(feature_df)[0]
-        
-        # Get probability of ad (class 1)
-        ad_probability = prediction_proba[1] if len(prediction_proba) > 1 else 0
-        
-        # Apply custom threshold: >= 0.21 = ad, < 0.21 = content
-        prediction = 'ad' if ad_probability >= 0.21 else 'content'
-        confidence = ad_probability if prediction == 'ad' else (1 - ad_probability)
-        
-        results.append({
-            'start_time': paragraph['start'],
-            'end_time': paragraph['end'],
-            'duration': duration,
-            'prediction': prediction,
-            'confidence': confidence,
-            'ad_probability': ad_probability,
-            'text': paragraph['text'][:100] + '...' if len(paragraph['text']) > 100 else paragraph['text']
-        })
-    
-    progress_bar.empty()
-    
-    # Merge consecutive segments with same prediction
-    merged_results = []
-    if results:
-        current_segment = results[0].copy()
-        
-        for result in results[1:]:
-            # If same prediction and consecutive, merge
-            if (result['prediction'] == current_segment['prediction'] and 
-                abs(result['start_time'] - current_segment['end_time']) < 2.0):
-                current_segment['end_time'] = result['end_time']
-                current_segment['duration'] = current_segment['end_time'] - current_segment['start_time']
-                current_segment['confidence'] = (current_segment['confidence'] + result['confidence']) / 2
-            else:
-                # Save current and start new
-                merged_results.append(current_segment)
-                current_segment = result.copy()
-        
-        # Don't forget the last segment
-        merged_results.append(current_segment)
-    
-    return merged_results, total_duration, paragraphs
-
-# Option to choose analysis method
-def analyze_podcast(audio_file_path, use_paragraphs=True):
-    """Wrapper function to choose analysis method"""
-    if use_paragraphs:
-        results, total_duration, paragraphs = analyze_podcast_with_paragraphs(audio_file_path)
-        return results, total_duration
-    else:
-        # Original 30-second chunk method
-        return analyze_podcast_fixed_chunks(audio_file_path)
-
-def analyze_podcast_fixed_chunks(audio_file_path, segment_duration=30):
-    """Original fixed-chunk analysis method"""
-    xgb_model, _ = load_models()
-    if xgb_model is None:
+def analyze_podcast(audio_file_path, segment_duration=30):
+    """Analyze podcast and return results"""
+    model = load_model()
+    if model is None:
         return None, None
     
     # Get duration
@@ -382,7 +191,7 @@ def analyze_podcast_fixed_chunks(audio_file_path, segment_duration=30):
             if feature_df['tempo'].dtype == 'object':
                 feature_df['tempo'] = pd.to_numeric(feature_df['tempo'], errors='coerce').fillna(0)
         
-        prediction_proba = xgb_model.predict_proba(feature_df)[0]
+        prediction_proba = model.predict_proba(feature_df)[0]
         
         # Get probability of ad (class 1)
         ad_probability = prediction_proba[1] if len(prediction_proba) > 1 else 0
@@ -407,7 +216,7 @@ def analyze_podcast_fixed_chunks(audio_file_path, segment_duration=30):
 # PODCAST SEARCH FEATURES
 # ==========================================
 
-def search_podcasts(query, limit=10):
+def search_podcasts(query, limit=5):
     """Search for podcasts using iTunes API"""
     try:
         url = "https://itunes.apple.com/search"
@@ -435,7 +244,7 @@ def search_podcasts(query, limit=10):
         st.error(f"Error searching podcasts: {e}")
         return []
 
-def get_podcast_episodes(feed_url, limit=20):
+def get_podcast_episodes(feed_url, limit=10):
     """Get recent episodes from a podcast RSS feed"""
     try:
         feed = feedparser.parse(feed_url)
@@ -682,22 +491,14 @@ def display_enhanced_results(results, total_duration, original_audio_path):
         df['end_min'] = df['end_time'] / 60
         df['confidence_pct'] = df['confidence'] * 100
         
-        # Include text preview if available
-        columns_to_show = ['start_min', 'end_min', 'prediction', 'confidence_pct']
-        column_config = {
-            'start_min': st.column_config.NumberColumn('Start (min)', format="%.1f"),
-            'end_min': st.column_config.NumberColumn('End (min)', format="%.1f"),
-            'prediction': st.column_config.TextColumn('Prediction'),
-            'confidence_pct': st.column_config.NumberColumn('Confidence (%)', format="%.1f")
-        }
-        
-        if 'text' in df.columns:
-            columns_to_show.append('text')
-            column_config['text'] = st.column_config.TextColumn('Text Preview')
-        
         st.dataframe(
-            df[columns_to_show],
-            column_config=column_config
+            df[['start_min', 'end_min', 'prediction', 'confidence_pct']],
+            column_config={
+                'start_min': st.column_config.NumberColumn('Start (min)', format="%.1f"),
+                'end_min': st.column_config.NumberColumn('End (min)', format="%.1f"),
+                'prediction': st.column_config.TextColumn('Prediction'),
+                'confidence_pct': st.column_config.NumberColumn('Confidence (%)', format="%.1f")
+            }
         )
 
 # ==========================================
@@ -707,20 +508,6 @@ def display_enhanced_results(results, total_duration, original_audio_path):
 def main():
     st.title("🎧 Podcast Ad Detector")
     st.markdown("Upload your own file or search for podcasts to analyze for ads!")
-    
-    # Add analysis method selector in sidebar
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        analysis_method = st.radio(
-            "Analysis Method:",
-            ["Paragraph-based (Recommended)", "Fixed 30-second chunks"],
-            index=0,
-            help="Paragraph-based analysis uses AI transcription to detect natural speech boundaries, providing more accurate results since the model was trained on paragraphs."
-        )
-        use_paragraphs = analysis_method == "Paragraph-based (Recommended)"
-        
-        if use_paragraphs:
-            st.info("🎯 Using paragraph detection for better accuracy. First analysis may take longer due to transcription.")
     
     # Create tabs
     tab1, tab2 = st.tabs(["📁 Upload File", "🔍 Search Podcasts"])
@@ -744,7 +531,7 @@ def main():
                         tmp_file.write(uploaded_file.read())
                         tmp_file_path = tmp_file.name
                     
-                    results, total_duration = analyze_podcast(tmp_file_path, use_paragraphs=use_paragraphs)
+                    results, total_duration = analyze_podcast(tmp_file_path)
                     
                     if results:
                         display_enhanced_results(results, total_duration, tmp_file_path)
@@ -756,3 +543,82 @@ def main():
                     st.session_state.total_duration,
                     st.session_state.original_audio_path
                 )
+    
+    # Tab 2: Podcast Search
+    with tab2:
+        st.markdown("Search and select podcasts from iTunes:")
+        
+        search_query = st.text_input("Search for podcasts:", placeholder="e.g., 'Joe Rogan', 'NPR News', 'Comedy'")
+        
+        if search_query:
+            with st.spinner("Searching podcasts..."):
+                podcasts = search_podcasts(search_query)
+            
+            if podcasts:
+                st.subheader(f"Found {len(podcasts)} podcasts:")
+                
+                for i, podcast in enumerate(podcasts):
+                    with st.container():
+                        col1, col2 = st.columns([1, 4])
+                        
+                        with col1:
+                            if podcast['artwork']:
+                                st.image(podcast['artwork'], width=100)
+                        
+                        with col2:
+                            st.write(f"**{podcast['name']}**")
+                            st.write(f"By: {podcast['artist']}")
+                            if podcast['description']:
+                                st.write(podcast['description'])
+                            
+                            if st.button(f"View Episodes", key=f"select_{i}"):
+                                st.session_state.selected_podcast = podcast
+                                st.session_state.show_episodes = True
+                        
+                        st.divider()
+        
+        # Show episodes if podcast selected
+        if st.session_state.get('show_episodes') and st.session_state.get('selected_podcast'):
+            podcast = st.session_state.selected_podcast
+            
+            st.subheader(f"Recent Episodes: {podcast['name']}")
+            
+            with st.spinner("Loading episodes..."):
+                episodes = get_podcast_episodes(podcast['feed_url'])
+            
+            if episodes:
+                for i, episode in enumerate(episodes):
+                    with st.expander(f"🎧 {episode['title']}"):
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            st.write(f"**Published:** {episode['published']}")
+                            st.write(f"**Duration:** {episode['duration']}")
+                            if episode['description']:
+                                st.write(episode['description'])
+                        
+                        with col2:
+                            if st.button("Analyze Episode", key=f"analyze_{i}"):
+                                with st.spinner("Downloading and analyzing episode..."):
+                                    temp_file_path = download_episode(episode['audio_url'])
+                                    
+                                    if temp_file_path:
+                                        results, total_duration = analyze_podcast(temp_file_path)
+                                        
+                                        if results:
+                                            st.success(f"✅ Analysis complete for: {episode['title']}")
+                                            display_enhanced_results(results, total_duration, temp_file_path)
+                                        
+                                        # Clean up
+                                        os.unlink(temp_file_path)
+
+if __name__ == "__main__":
+    # Initialize session state
+    if 'show_episodes' not in st.session_state:
+        st.session_state.show_episodes = False
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_complete' not in st.session_state:
+        st.session_state.analysis_complete = False
+    
+    main()
