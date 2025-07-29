@@ -215,7 +215,7 @@ def analyze_podcast(audio_file_path, segment_duration=30):
 # NEW FEATURES: Podcast Search
 # ==========================================
 
-def search_podcasts(query, limit=10):
+def search_podcasts(query, limit=5):
     """Search for podcasts using iTunes API"""
     try:
         url = "https://itunes.apple.com/search"
