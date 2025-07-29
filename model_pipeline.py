@@ -27,7 +27,6 @@ def load_model():
     return joblib.load('./feature_analysis/models/xgb_best_model_20250727.joblib')
 
 def extract_segment_features(audio_file, start_time, duration):
-    """Your existing feature extraction function - unchanged"""
     
     # Load audio segment
     y, sr = librosa.load(audio_file, offset=start_time, duration=duration, sr=22050)
@@ -584,7 +583,7 @@ def display_enhanced_results(results, total_duration, original_audio_path):
 
 def main():
     st.title("🎧 Podcast Ad Detector")
-    st.markdown("Upload your own file or search for podcasts to analyze for ads!")
+    st.markdown("Upload or search for Podcasts to make ad-free!")
     
     # Create tabs
     tab1, tab2 = st.tabs(["📁 Upload File", "🔍 Search Podcasts"])
