@@ -7,7 +7,7 @@ from datetime import datetime
 
 class PodcastDataCollector:
     """
-    Main class to collect and process podcast data for training
+    class to collect and process podcast data for training
     """
     
     def __init__(self, output_dir="training_data"):
@@ -109,7 +109,9 @@ def get_starter_podcast_feeds():
         # "https://feeds.simplecast.com/82FI35Px", 
         # "https://feeds.simplecast.com/54nAGcIl", 
         "https://feeds.npr.org/510333/podcast.xml", 
-        "https://feeds.npr.org/510289/podcast.xml"
+        "https://feeds.npr.org/510289/podcast.xml", 
+        "https://feeds.npr.org/381444908/podcast.xml", # fresh air 
+        "https://feeds.simplecast.com/kwWc0lhf" # hidden brain
     ]
 
 

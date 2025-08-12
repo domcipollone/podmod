@@ -13,20 +13,27 @@ print('reading_csv...')
 df = pd.read_csv("feature_analysis/features_20250725.csv", header=0)
 df['is_ad'] = (df['target'] == 'ad').astype(int)
 
-correlated_features = ['spectral_rolloff_85_mean', 'chroma_var', 'amplitude_mean', 'amplitude_std', 'spectral_rolloff_95_mean', 'dynamic_range', 'spectral_rolloff_mean']
-correlated_features_v2 = ['poly_features_mean', 'zcr_std', 'beats_per_second', 'poly_features_std', 'amplitude_min', 'mfcc_2_mean', 'spectral_flatness_std', 'rms_std']
+correlated_features = ['spectral_rolloff_85_mean', 'chroma_var', 'amplitude_mean',
+                        'amplitude_std', 'spectral_rolloff_95_mean', 'dynamic_range', 'spectral_rolloff_mean',
+                        'poly_features_mean', 'zcr_std', 'beats_per_second', 'poly_features_std', 'amplitude_min',
+                        'mfcc_2_mean', 'spectral_flatness_std', 'rms_std']
 
 non_features = ['audio_file','transcript_id','start_time','end_time','duration','confidence','target']
-features_to_drop = correlated_features + correlated_features_v2
 
-df.drop(non_features, axis=1, inplace=True)
+features_to_drop = non_features + correlated_features
+
 df.drop(features_to_drop, axis=1, inplace=True)
 
+# format tempo to a float - librosa exports it as string for some reason
 df['tempo'] = df['tempo'].str.extract(r'(\d+\.?\d*)').astype(float)
 
+# model on all targets 
 df_targets = df[df['is_ad'] == 1].copy()
+
+# sampling 4x non-targets 
 df_non_targets = df[df['is_ad'] == 0].sample(n=len(df_targets)*4).copy()
 
+# concatenate for full modeling dataset
 df_model = pd.concat([df_targets, df_non_targets], axis=0)
 
 print('splitting into X and y')
