@@ -173,7 +173,11 @@ class TranscribeLabelPipeline:
         print("Getting transcript...")
         self.get_transcript()
         print("Getting paragraphs...")
+
         paragraphs_data = self.get_paragraphs()
+
+        if paragraphs_data is None: 
+            return None 
 
         num_paragrahs = len(paragraphs_data['paragraphs'])
         print(f"{num_paragrahs} paragraphs retrieved")
@@ -213,17 +217,17 @@ class QueryDatabase:
                 df.to_sql(name=table_name, con=conn, if_exists='append', index=False, chunksize=1000, method='multi')
 
             print(f"Sucessfully wrote data to {table_name}")
-            print("Disposing of Engine")
-
-            self.db_engine.dispose()
 
             return self
 
         except Exception: 
-            self.db_engine.dispose()
             print(f"Failed to write data to {table_name}")
             print(f"Full traceback: {traceback.format_exc()}")
             return None
+        
+        finally: 
+            self.db_engine.dispose()
+
         
     def read_data(self, query):
 
@@ -233,16 +237,16 @@ class QueryDatabase:
                 df = pd.read_sql_query(sql=query, con=conn)
 
             print("Sucessfully read data")
-            print("Disposing of Engine")
 
             return df
         
         except Exception as e:
-            self.db_engine.dispose()
             print(f"Failed to read data: {e}")
             print(f"Full traceback: {traceback.format_exc()}")
             return None 
 
+        finally: 
+            self.db_engine.dispose()
 
         
 if __name__ == "__main__": 
@@ -259,8 +263,6 @@ if __name__ == "__main__":
 
     for f in labeled_files:
         previously_transcribed_paths.add(os.path.join(training_data_path, f))
-
-
 
     previously_transcribed = ["training_data/audio/Dead-Awake_1.mp3",
                                "training_data/audio/How-economists-and-TikTok-know-if-a-recession-is-coming_1.mp3",
@@ -292,15 +294,20 @@ if __name__ == "__main__":
             
             episode_results = pipe.analyze_episode_for_ads()
 
-            # extract the transcript id from the episode results dict 
-            # this loop operates on 1 audio file so the transcript id is the same 
-            retrieved_transcript_id = episode_results[0]['transcript_id']
-            transcript_log[0]['transcript_id'] = retrieved_transcript_id
+            if episode_results is None: 
+                # the methods in analyze_episode_for_ads return None if there are errors
+                continue 
 
-            log = pd.DataFrame.from_dict(data=transcript_log, orient='columns')
+            else: 
+                # extract the transcript id from the episode results dict 
+                # this loop operates on 1 audio file so the transcript id is the same 
+                retrieved_transcript_id = episode_results[0]['transcript_id']
+                transcript_log[0]['transcript_id'] = retrieved_transcript_id
 
-            QueryDatabase().write_data(df=log, table_name='transcript_log')
+                log = pd.DataFrame.from_dict(data=transcript_log, orient='columns')
 
-            df_results = pd.DataFrame.from_dict(data=episode_results, orient='columns')
+                QueryDatabase().write_data(df=log, table_name='transcript_log')
 
-            QueryDatabase().write_data(df=df_results, table_name='podcast_segment_labels')
+                df_results = pd.DataFrame.from_dict(data=episode_results, orient='columns')
+
+                QueryDatabase().write_data(df=df_results, table_name='podcast_segment_labels')
