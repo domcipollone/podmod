@@ -8,53 +8,8 @@ import traceback
 import multiprocessing as mp 
 from functools import partial 
 from sqlalchemy import create_engine
+from query_db import QueryDatabase
 warnings.filterwarnings('ignore')
-
-
-class QueryDatabase: 
-
-    def __init__(self):
-        self.db_engine = create_engine(os.getenv("DB_CONN_STRING"))
-        print("Built DB engine")
-
-    def write_data(self, df, table_name): 
-
-        try: 
-            print(f"Attempting to write {len(df)} rows to {table_name}")
-
-            with self.db_engine.connect() as conn: 
-                df.to_sql(name=table_name, con=conn, if_exists='append', index=False, chunksize=1000, method='multi')
-
-            print(f"Sucessfully wrote data to {table_name}")
-            print("Disposing of Engine")
-
-            self.db_engine.dispose()
-
-            return self
-
-        except Exception: 
-            self.db_engine.dispose()
-            print(f"Failed to write data to {table_name}")
-            print(f"Full traceback: {traceback.format_exc()}")
-            return None
-        
-    def read_data(self, query):
-
-        try: 
-            print("Attempting to read data")
-            with self.db_engine.connect() as conn: 
-                df = pd.read_sql_query(sql=query, con=conn)
-
-            print("Sucessfully read data")
-            print("Disposing of Engine")
-
-            return df
-        
-        except Exception as e:
-            self.db_engine.dispose()
-            print(f"Failed to read data: {e}")
-            print(f"Full traceback: {traceback.format_exc()}")
-            return None 
 
 
 def extract_segment_features(audio_file, start_time, duration):

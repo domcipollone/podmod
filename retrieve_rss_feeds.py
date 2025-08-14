@@ -111,7 +111,8 @@ def get_starter_podcast_feeds():
         "https://feeds.npr.org/510333/podcast.xml", 
         "https://feeds.npr.org/510289/podcast.xml", 
         "https://feeds.npr.org/381444908/podcast.xml", # fresh air 
-        "https://feeds.simplecast.com/kwWc0lhf" # hidden brain
+        "https://feeds.simplecast.com/kwWc0lhf", # hidden brain
+        "https://feeds.megaphone.fm/QCD6036500916" #philosophize this
     ]
 
 
